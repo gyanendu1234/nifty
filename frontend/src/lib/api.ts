@@ -149,6 +149,13 @@ export async function getTrends(params: {
   return apiFetch<TrendResponse>(`/api/trends${qs}`);
 }
 
+// ── NSE Live ──
+
+export async function getNseLive(index = 'NIFTY 500') {
+  const qs = buildQuery({ index });
+  return apiFetch<import('@/types').NseLiveResponse>(`/api/nse/live${qs}`);
+}
+
 // ── Admin (requires Bearer token) ──
 
 export async function uploadNiftyFile(

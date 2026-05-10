@@ -9,6 +9,7 @@ import healthRoutes    from './healthRoutes';
 import compareRoutes   from './compareRoutes';
 import starsRoutes     from './starsRoutes';
 import trendsRoutes    from './trendsRoutes';
+import nseRoutes       from './nseRoutes';
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use('/health',    healthRoutes);
 router.use('/compare',   compareRoutes);
 router.use('/stars',     starsRoutes);
 router.use('/trends',    trendsRoutes);
+router.use('/nse',       nseRoutes);
 
 export default router;

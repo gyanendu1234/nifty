@@ -4,16 +4,17 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, TrendingUp, ArrowLeftRight,
-  GitCompare, Flame, Search as SearchIcon, ChevronRight, ChevronLeft,
+  GitCompare, Flame, Search as SearchIcon, ChevronRight, ChevronLeft, Activity,
 } from 'lucide-react';
 
 const NAV = [
-  { href: '/dashboard',      icon: LayoutDashboard, label: 'Dashboard',      color: 'rgba(59,130,246,0.7)'  },
-  { href: '/ladder',         icon: TrendingUp,      label: 'Ladder',         color: 'rgba(34,197,94,0.7)'   },
-  { href: '/entry-exit',     icon: ArrowLeftRight,  label: 'Entry / Exit',   color: 'rgba(168,85,247,0.7)'  },
-  { href: '/compare',        icon: GitCompare,      label: 'Compare',        color: 'rgba(14,165,233,0.7)'  },
-  { href: '/rising-falling', icon: Flame,           label: 'Rising & Falling', color: 'rgba(234,179,8,0.7)' },
-  { href: '/search',         icon: SearchIcon,      label: 'Search',         color: 'rgba(244,114,182,0.7)' },
+  { href: '/dashboard',      icon: LayoutDashboard, label: 'Dashboard',        color: 'rgba(59,130,246,0.7)'  },
+  { href: '/ladder',         icon: TrendingUp,      label: 'Ladder',           color: 'rgba(34,197,94,0.7)'   },
+  { href: '/entry-exit',     icon: ArrowLeftRight,  label: 'Entry / Exit',     color: 'rgba(168,85,247,0.7)'  },
+  { href: '/compare',        icon: GitCompare,      label: 'Compare',          color: 'rgba(14,165,233,0.7)'  },
+  { href: '/rising-falling', icon: Flame,           label: 'Rising & Falling', color: 'rgba(234,179,8,0.7)'  },
+  { href: '/nse-live',       icon: Activity,        label: 'NSE Live',         color: 'rgba(34,211,238,0.7)'  },
+  { href: '/search',         icon: SearchIcon,      label: 'Search',           color: 'rgba(244,114,182,0.7)' },
 ];
 
 interface Props {

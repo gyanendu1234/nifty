@@ -283,6 +283,83 @@ export interface TrendResponse {
 
 // ── Rising/Falling stars types ──
 
+// ── NSE Live Data ──
+
+export interface NseStockMeta {
+  symbol:      string;
+  companyName: string;
+  industry:    string;
+  isin:        string;
+  isFNOSec?:   boolean;
+  isETFSec?:   boolean;
+  isDelisted?: boolean;
+}
+
+export interface NseStock {
+  priority:           number;
+  symbol:             string;
+  identifier:         string;
+  series:             string;
+  open:               number;
+  dayHigh:            number;
+  dayLow:             number;
+  lastPrice:          number;
+  previousClose:      number;
+  change:             number;
+  pChange:            number;
+  totalTradedVolume:  number;
+  yearHigh:           number;
+  yearLow:            number;
+  nearWKH:            number;
+  nearWKL:            number;
+  perChange365d:      number;
+  date365dAgo:        string;
+  perChange30d:       number;
+  date30dAgo:         string;
+  meta:               NseStockMeta;
+}
+
+export interface NseIndexMetadata {
+  indexName:     string;
+  open:          number;
+  high:          number;
+  low:           number;
+  previousClose: number;
+  last:          number;
+  percChange:    number;
+  change:        number;
+  breadth: {
+    declines:  string;
+    advances:  string;
+    unchanged: string;
+  };
+}
+
+export interface NseMarketStatus {
+  market:              string;
+  marketStatus:        string;
+  tradeDate:           string;
+  index:               string;
+  last:                number;
+  variation:           number;
+  percentChange:       number;
+  marketStatusMessage: string;
+}
+
+export interface NseIndexData {
+  name:      string;
+  timestamp: string;
+  advance: { declines: string; advances: string; unchanged: string };
+  data:      NseStock[];
+  metadata:  NseIndexMetadata;
+  marketStatus: NseMarketStatus;
+}
+
+export interface NseLiveResponse {
+  data:      NseIndexData;
+  cached_at: string;
+}
+
 export interface StarRow {
   company_id: string;
   company_name: string | null;
