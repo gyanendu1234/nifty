@@ -308,6 +308,7 @@ export interface NseStock {
   change:             number;
   pChange:            number;
   totalTradedVolume:  number;
+  totalTradedValue?:  number;
   yearHigh:           number;
   yearLow:            number;
   nearWKH:            number;
@@ -316,6 +317,9 @@ export interface NseStock {
   date365dAgo:        string;
   perChange30d:       number;
   date30dAgo:         string;
+  chartTodayPath?:    string;
+  chart30dPath?:      string;
+  chart365dPath?:     string;
   meta:               NseStockMeta;
 }
 

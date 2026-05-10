@@ -47,7 +47,13 @@
       "Bash(Get-ChildItem \"c:\\\\Workspace\\\\nifty\" -Name)",
       "Bash(git init *)",
       "Bash(git remote *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git branch *)",
+      "Bash(git push *)",
+      "Bash(gh auth *)",
+      "Bash(git -C \"c:/Workspace/nifty\" config --list)",
+      "PowerShell(git add CLAUDE.md \"frontend/src/app/\\(public\\)/compare/page.tsx\" \"frontend/src/app/\\(public\\)/nse-live/page.tsx\" \"frontend/src/app/\\(public\\)/rising-falling/page.tsx\" \"frontend/src/types/index.ts\" \"frontend/tsconfig.tsbuildinfo\" \".claude/settings.local.json\")"
     ]
   }
 }

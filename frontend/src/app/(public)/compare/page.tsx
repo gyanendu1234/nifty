@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine,
+  Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from 'recharts';
 import { getPeriods, getCompare } from '@/lib/api';
 import { NiftyPeriod, CompareRow, ComparePeriod } from '@/types';
@@ -23,7 +23,7 @@ const LINE_COLORS = [
   '#2dd4bf','#f472b6','#4ade80','#38bdf8','#facc15',
 ];
 
-const N_OPTIONS = [5, 10, 15, 20, 25, 30];
+const N_OPTIONS = [5, 10, 15, 20, 25, 30, 35, 40, 45];
 const PERIOD_OPTIONS = [4, 6, 8, 'all'] as const;
 type PeriodCount = 4 | 6 | 8 | 'all';
 
@@ -53,75 +53,37 @@ function ChartTooltip({
   periodMeta: ComparePeriod[];
   rowsByName: Map<string, CompareRow>;
 }) {
-  if (!active || !payload?.length) return null;
+  if (!active || !payload?.length || !focusedLine) return null;
+
+  const item = payload.find(p => p.name === focusedLine);
+  if (!item || item.value == null) return null;
 
   const period = periodMeta.find(p => p.label === label);
-  const valid  = payload.filter(p => p.value != null);
-  if (!valid.length) return null;
-
-  // When a line is directly hovered, show it prominently at top, rest compact below
-  const focused = focusedLine ? valid.find(p => p.name === focusedLine) : null;
-  const sorted  = [...valid].sort((a, b) => (a.value ?? 9999) - (b.value ?? 9999));
+  const category = period ? rowsByName.get(item.name)?.ranks[period.id]?.category : null;
 
   return (
     <div
       className="rounded-xl text-xs"
       style={{
         background: 'rgba(10,14,26,0.97)',
-        border: '1px solid rgba(148,163,184,0.18)',
+        border: `1px solid ${item.color}50`,
         boxShadow: '0 8px 32px rgba(0,0,0,0.65)',
         backdropFilter: 'blur(14px)',
-        minWidth: 200,
-        maxWidth: 260,
+        minWidth: 160,
       }}
     >
-      {/* Header */}
-      <p className="text-slate-400 text-[10px] font-medium px-3 pt-2.5 pb-2 border-b border-slate-700/40">
+      <p className="text-slate-500 text-[10px] font-medium px-3 pt-2 pb-1.5 border-b border-slate-800">
         {label}
       </p>
-
-      {/* Focused company — prominent */}
-      {focused && (
-        <div className="px-3 py-2 border-b border-slate-700/40" style={{ background: `${focused.color}12` }}>
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: focused.color }} />
-            <span className="text-slate-100 font-semibold truncate">{focused.name}</span>
-          </div>
-          <div className="pl-4 flex items-center gap-2">
-            <span className="font-mono font-bold text-white text-sm">#{focused.value}</span>
-            {period && rowsByName.get(focused.name)?.ranks[period.id]?.category && (
-              <CategoryBadge category={rowsByName.get(focused.name)!.ranks[period.id].category} size="sm" />
-            )}
-          </div>
+      <div className="px-3 py-2.5" style={{ background: `${item.color}10` }}>
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-2.5 h-2.5 rounded-full shrink-0 flex-none" style={{ background: item.color }} />
+          <span className="text-slate-200 font-semibold truncate">{item.name}</span>
         </div>
-      )}
-
-      {/* All companies at this period, sorted by rank */}
-      <div className="px-2 py-1.5 space-y-0.5 max-h-52 overflow-y-auto">
-        {sorted.map(item => {
-          const isFocused = item.name === focusedLine;
-          return (
-            <div
-              key={item.name}
-              className="flex items-center gap-2 px-1.5 py-1 rounded-md"
-              style={{ background: isFocused ? `${item.color}18` : 'transparent' }}
-            >
-              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: item.color }} />
-              <span
-                className="flex-1 truncate"
-                style={{ color: isFocused ? '#f1f5f9' : '#94a3b8' }}
-              >
-                {item.name}
-              </span>
-              <span
-                className="font-mono font-semibold tabular-nums shrink-0"
-                style={{ color: isFocused ? '#fff' : '#cbd5e1' }}
-              >
-                #{item.value}
-              </span>
-            </div>
-          );
-        })}
+        <div className="pl-4 flex items-center gap-2">
+          <span className="font-mono font-bold text-white text-base tabular-nums">#{item.value}</span>
+          {category && <CategoryBadge category={category} size="sm" />}
+        </div>
       </div>
     </div>
   );
@@ -296,7 +258,7 @@ export default function ComparePage() {
   const [selected, setSelected]       = useState<Set<string>>(new Set());
   const [periodCount, setPeriodCount] = useState<PeriodCount>(4);
   const [category, setCategory]       = useState('');
-  const [n, setN]                     = useState(10);
+  const [n, setN]                     = useState(5);
   const [selectionMode, setMode]      = useState<SelectionMode>('top');
   const [tab, setTab]                 = useState<Tab>('table');
   const [data, setData]               = useState<CompareRow[]>([]);
@@ -394,7 +356,7 @@ export default function ComparePage() {
   );
 
   // Reset active IDs when displayed slice changes; keep previously-pinned ones active
-  useEffect(() => {
+  useLayoutEffect(() => {
     setActiveIds(prev => {
       const next = new Set(displayedData.map(r => r.company_id));
       for (const id of prev) { if (pinnedIds.has(id)) next.add(id); }
@@ -413,6 +375,32 @@ export default function ComparePage() {
     for (const r of allCandidates) m.set(r.company_name ?? r.isin, r);
     return m;
   }, [allCandidates]);
+
+  // Smart Y-axis: tight domain around actual data; sparse ticks in empty cap zones
+  const chartYAxis = useMemo(() => {
+    const allRanks = visibleRows
+      .flatMap(r => Object.values(r.ranks).map(v => v?.rank))
+      .filter((r): r is number => r != null);
+    if (!allRanks.length) {
+      return { domain: [1, 300] as [number, number], ticks: [1, 50, 100, 150, 200, 250, 300] as number[] };
+    }
+    const minR = Math.min(...allRanks);
+    const maxR = Math.max(...allRanks);
+    const dataSpan = Math.max(maxR - minR, 1);
+    const pad = Math.max(15, Math.round(dataSpan * 0.08));
+    const domMin = Math.max(1, minR - pad);
+    const domMax = maxR + pad;
+    const step = dataSpan <= 80 ? 10 : dataSpan <= 150 ? 20 : dataSpan <= 300 ? 25 : dataSpan <= 500 ? 50 : 100;
+    const tickSet = new Set<number>();
+    if (100 >= domMin && 100 <= domMax) tickSet.add(100);
+    if (250 >= domMin && 250 <= domMax) tickSet.add(250);
+    const first = Math.ceil(domMin / step) * step;
+    for (let t = first; t <= domMax; t += step) tickSet.add(t);
+    return {
+      domain: [domMin, domMax] as [number, number],
+      ticks: Array.from(tickSet).sort((a, b) => a - b),
+    };
+  }, [visibleRows]);
 
   // Debounced server-side search — finds ANY company, not just the loaded 200
   useEffect(() => {
@@ -713,57 +701,85 @@ export default function ComparePage() {
                     <span className="text-slate-500 font-normal ml-1">({visibleRows.length} visible)</span>
                   )}
                 </p>
-                <p className="text-xs text-slate-500">Lower # = better</p>
+                <p className="text-xs text-slate-500">Lower # = better · rank improves upward</p>
               </div>
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart
-                  data={chartData}
-                  margin={{ top: 8, right: 20, left: 0, bottom: 8 }}
-                  onMouseLeave={() => setHoveredLine(null)}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.08)" />
-                  <XAxis
-                    dataKey="period"
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                    axisLine={{ stroke: 'rgba(148,163,184,0.15)' }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    reversed
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                    axisLine={{ stroke: 'rgba(148,163,184,0.15)' }}
-                    tickLine={false}
-                    tickFormatter={v => `#${v}`}
-                    width={44}
-                  />
-                  <ReferenceLine y={100} stroke="rgba(34,197,94,0.3)" strokeDasharray="4 3"
-                    label={{ value: 'Large/Mid', fill: '#4ade80', fontSize: 10, position: 'insideTopLeft' }} />
-                  <ReferenceLine y={250} stroke="rgba(168,85,247,0.3)" strokeDasharray="4 3"
-                    label={{ value: 'Mid/Small', fill: '#c084fc', fontSize: 10, position: 'insideTopLeft' }} />
-                  <Tooltip content={renderTooltip} />
-                  {visibleRows.map(row => {
-                    const idx    = allCandidates.findIndex(d => d.company_id === row.company_id);
-                    const color  = LINE_COLORS[idx % LINE_COLORS.length];
-                    const name   = row.company_name ?? row.isin;
-                    const active = hoveredLine === null || hoveredLine === name;
-                    return (
-                      <Line
-                        key={row.isin}
-                        type="monotone"
-                        dataKey={name}
-                        stroke={color}
-                        strokeWidth={hoveredLine === name ? 3 : hoveredLine ? 1 : 2}
-                        strokeOpacity={active ? 1 : 0.2}
-                        dot={{ r: hoveredLine === name ? 5 : 3, strokeWidth: 0, fill: color }}
-                        activeDot={{ r: 8, strokeWidth: 2, stroke: '#0f172a', fill: color }}
-                        connectNulls
-                        onMouseEnter={() => setHoveredLine(name)}
-                        onMouseLeave={() => setHoveredLine(null)}
+              <div className="overflow-x-auto">
+                <div style={{ minWidth: Math.max(periodMeta.length * 110 + 120, 480) }}>
+                  <ResponsiveContainer width="100%" height={460}>
+                    <LineChart
+                      data={chartData}
+                      margin={{ top: 8, right: 80, left: 0, bottom: 8 }}
+                      onMouseLeave={() => setHoveredLine(null)}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.08)" />
+                      <XAxis
+                        dataKey="period"
+                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        axisLine={{ stroke: 'rgba(148,163,184,0.15)' }}
+                        tickLine={false}
                       />
-                    );
-                  })}
-                </LineChart>
-              </ResponsiveContainer>
+                      <YAxis
+                        reversed
+                        domain={chartYAxis.domain}
+                        ticks={chartYAxis.ticks}
+                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        axisLine={{ stroke: 'rgba(148,163,184,0.15)' }}
+                        tickLine={false}
+                        tickFormatter={v => `#${v}`}
+                        width={44}
+                      />
+                      <ReferenceArea y1={1}   y2={100}                    fill="rgba(34,197,94,0.05)"  ifOverflow="hidden" />
+                      <ReferenceArea y1={101} y2={250}                    fill="rgba(234,179,8,0.04)"  ifOverflow="hidden" />
+                      <ReferenceArea y1={251} y2={chartYAxis.domain[1]}   fill="rgba(168,85,247,0.04)" ifOverflow="hidden" />
+                      <ReferenceLine y={100} stroke="rgba(34,197,94,0.3)" strokeDasharray="4 3"
+                        label={{ value: 'Large/Mid', fill: '#4ade80', fontSize: 10, position: 'insideTopLeft' }} />
+                      <ReferenceLine y={250} stroke="rgba(168,85,247,0.3)" strokeDasharray="4 3"
+                        label={{ value: 'Mid/Small', fill: '#c084fc', fontSize: 10, position: 'insideTopLeft' }} />
+                      <Tooltip content={renderTooltip} />
+                      {visibleRows.map(row => {
+                        const idx       = allCandidates.findIndex(d => d.company_id === row.company_id);
+                        const color     = LINE_COLORS[idx % LINE_COLORS.length];
+                        const name      = row.company_name ?? row.isin;
+                        const isFocused = hoveredLine === name;
+                        const active    = hoveredLine === null || isFocused;
+                        const endLabel  = row.nse_symbol ?? (name.length > 10 ? name.slice(0, 10) + '…' : name);
+                        return (
+                          <Line
+                            key={row.isin}
+                            type="monotone"
+                            dataKey={name}
+                            stroke={color}
+                            strokeWidth={isFocused ? 4.5 : hoveredLine ? 1.5 : 2.5}
+                            strokeOpacity={active ? 1 : 0.2}
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            dot={(props: any) => {
+                              const { cx, cy, index } = props;
+                              if (cx == null || cy == null) return <g key={`d${index ?? 'x'}`} />;
+                              const r = isFocused ? 5 : 3;
+                              return (
+                                <g key={`d${index}`}>
+                                  <circle cx={cx} cy={cy} r={r} fill={color} strokeWidth={0} />
+                                  {index === chartData.length - 1 && (
+                                    <text x={cx + r + 5} y={cy + 4} fill={color} fontSize={9}
+                                      fontWeight={isFocused ? 700 : 600}
+                                      style={{ pointerEvents: 'none', userSelect: 'none' } as React.CSSProperties}>
+                                      {endLabel}
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            }}
+                            activeDot={{ r: 8, strokeWidth: 2, stroke: '#0f172a', fill: color }}
+                            connectNulls
+                            onMouseEnter={() => setHoveredLine(name)}
+                            onMouseLeave={() => setHoveredLine(null)}
+                          />
+                        );
+                      })}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
           )}
 

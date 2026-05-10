@@ -301,3 +301,82 @@ These are faster than the REST-based `recalculate-movements.mjs` which makes one
 | PATCH | `/api/admin/companies/:companyId/sector` | Set sector_primary |
 | POST | `/api/admin/companies/:companyId/tags` | Set sector tags |
 | DELETE | `/api/admin/periods/:periodId` | Delete a period and its data |
+
+## NSE Live Page — Enhanced UI (session 2026-05-10)
+
+### Sparkline / Trend Charts
+NSE API returns three SVG chart URL fields per stock:
+- `chartTodayPath` — intraday chart (e.g. `https://nsearchives.nseindia.com/today/SONATSOFTWEQN.svg`)
+- `chart30dPath` — 30-day chart (`/30d/SONATSOFTW-EQ.svg`)
+- `chart365dPath` — 365-day chart (`/365d/SONATSOFTW-EQ.svg`)
+
+These are loaded via `<img>` tags (avoids CORS). `onError` silently hides the img if NSE blocks it.
+
+`stockChartUrl(stock, statMode)` picks context-appropriate URL:
+- `gainers_30d` / `losers_30d` → `chart30dPath`
+- `gainers_1y` / `losers_1y` → `chart365dPath`
+- all other modes (today gainers/losers) → `chartTodayPath`
+
+Losers get a CSS `filter: hue-rotate(300deg)` to shift the green SVG line to red.
+
+The "Trend" column header is `hidden 2xl:table-cell` (only visible on very wide screens).
+
+### Additional Data Shown Per Row
+- **F&O badge**: purple `F&O` pill when `stock.meta?.isFNOSec === true`
+- **Absolute ₹ change**: shown as sub-text under the % change column (green/red colored)
+- **Trade value**: `stock.totalTradedValue` formatted with `fmtVal()` helper (₹Cr / BCr / KCr) shown under volume
+- **52W proximity label**: shown below the range bar
+  - Within 5% of 52W high: `▲ X.XX% to 52H` (green)
+  - Within 5% of 52W low: `▼ X.XX% to 52L` (red)
+  - Otherwise: shows position % along the bar
+- Fields `nearWKH` / `nearWKL` on `NseStock` are % distance from 52W high / low
+
+### NseStock type additions (types/index.ts)
+```typescript
+export interface NseStock {
+  // existing fields...
+  totalTradedValue?:  number;   // optional — not always present
+  chartTodayPath?:    string;
+  chart30dPath?:      string;
+  chart365dPath?:     string;
+}
+```
+
+## Charts — Y-axis & Tooltip Unification (session 2026-05-10)
+
+### Smart Y-axis (`chartYAxis` useMemo) — identical in both pages
+Both `/rising-falling` and `/compare` use the same `chartYAxis` useMemo:
+- Computes tight domain from visible rank data with 8% padding (min 15)
+- Adaptive tick step: 10 (span ≤80), 20 (≤150), 25 (≤300), 50 (≤500), 100 (larger)
+- Inserts cap boundaries (100, 250) into ticks only if they fall within domain
+- `domain[1]` used as `y2` on the Small Cap `ReferenceArea` so it clips correctly (no `y2={9999}`)
+
+### YAxis props — unified across both pages
+```tsx
+<YAxis
+  reversed
+  domain={chartYAxis.domain}
+  ticks={chartYAxis.ticks}
+  tick={{ fontSize: 11, fill: '#64748b' }}
+  tickLine={false}
+  axisLine={{ stroke: '#334155' }}
+  tickFormatter={v => `#${v}`}
+  width={44}
+/>
+```
+- `width={44}` ensures both charts have identical left-margin for Y-axis labels
+- `tickFormatter={v => \`#${v}\`}` shows `#100` style labels (no `label` prop)
+
+### Hover Tooltip — single-company only
+Both `TrendTooltip` (rising-falling) and `ChartTooltip` (compare) now show ONLY the hovered line:
+```tsx
+function TrendTooltip({ active, payload, label, focusedLine }) {
+  if (!active || !payload?.length || !focusedLine) return null;
+  const item = payload.find(p => p.name === focusedLine);
+  if (!item || item.value == null) return null;
+  // render single company card
+}
+```
+- Returns `null` when mouse is not directly over a line (`focusedLine` is null)
+- `focusedLine` is set via `onMouseEnter`/`onMouseLeave` on each `<Line>` component
+- Compare tooltip additionally shows a `CategoryBadge` for the company's category at that period

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from 'recharts';
 import { getTrends } from '@/lib/api';
 import { TrendRow, TrendPeriod } from '@/types';
@@ -144,53 +144,30 @@ function TrendTooltip({
 }: {
   active?: boolean; payload?: TPayload[]; label?: string; focusedLine: string | null;
 }) {
-  if (!active || !payload?.length) return null;
-  const valid  = payload.filter(p => p.value != null);
-  if (!valid.length) return null;
-  const sorted  = [...valid].sort((a, b) => (a.value ?? 9999) - (b.value ?? 9999));
-  const focused = focusedLine ? valid.find(p => p.name === focusedLine) : null;
+  if (!active || !payload?.length || !focusedLine) return null;
+  const item = payload.find(p => p.name === focusedLine);
+  if (!item || item.value == null) return null;
 
   return (
     <div
       className="rounded-xl text-xs"
       style={{
         background: 'rgba(10,14,26,0.97)',
-        border: '1px solid rgba(148,163,184,0.18)',
+        border: `1px solid ${item.color}50`,
         boxShadow: '0 8px 32px rgba(0,0,0,0.65)',
         backdropFilter: 'blur(14px)',
-        minWidth: 180, maxWidth: 240,
+        minWidth: 160,
       }}
     >
-      <p className="text-slate-400 text-[10px] font-medium px-3 pt-2.5 pb-2 border-b border-slate-700/40">
+      <p className="text-slate-500 text-[10px] font-medium px-3 pt-2 pb-1.5 border-b border-slate-800">
         {label}
       </p>
-      {focused && (
-        <div className="px-3 py-2 border-b border-slate-700/40" style={{ background: `${focused.color}12` }}>
-          <div className="flex items-center gap-2 mb-0.5">
-            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: focused.color }} />
-            <span className="text-slate-100 font-semibold truncate">{focused.name}</span>
-          </div>
-          <span className="font-mono font-bold text-white text-sm pl-4">#{focused.value}</span>
+      <div className="px-3 py-2.5" style={{ background: `${item.color}10` }}>
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-2.5 h-2.5 rounded-full shrink-0 flex-none" style={{ background: item.color }} />
+          <span className="text-slate-200 font-semibold truncate">{item.name}</span>
         </div>
-      )}
-      <div className="px-2 py-1.5 space-y-0.5 max-h-52 overflow-y-auto">
-        {sorted.map(item => (
-          <div
-            key={item.name}
-            className="flex items-center gap-2 px-1.5 py-1 rounded-md"
-            style={{ background: item.name === focusedLine ? `${item.color}18` : 'transparent' }}
-          >
-            <div className="w-2 h-2 rounded-full shrink-0" style={{ background: item.color }} />
-            <span className="flex-1 truncate"
-              style={{ color: item.name === focusedLine ? '#f1f5f9' : '#94a3b8' }}>
-              {item.name}
-            </span>
-            <span className="font-mono font-semibold tabular-nums shrink-0"
-              style={{ color: item.name === focusedLine ? '#fff' : '#cbd5e1' }}>
-              #{item.value}
-            </span>
-          </div>
-        ))}
+        <span className="font-mono font-bold text-white text-base pl-4.5 tabular-nums">#{item.value}</span>
       </div>
     </div>
   );
@@ -208,7 +185,7 @@ export default function RankTrendsPage() {
   const [netSortDir, setNetSortDir] = useState<'desc' | 'asc'>('desc');
 
   // Chart state
-  const [chartN,         setChartN]         = useState(15);
+  const [chartN,         setChartN]         = useState(5);
   const [activeChartIds, setActiveChartIds] = useState<Set<string>>(new Set());
   const [hoveredLine,    setHoveredLine]    = useState<string | null>(null);
 
@@ -282,10 +259,33 @@ export default function RankTrendsPage() {
     return point;
   }), [periods, visibleChartRows]);
 
-  const chartMaxRank = useMemo(() => Math.max(
-    ...visibleChartRows.flatMap(r => Object.values(r.ranks).map(v => v.rank ?? 0)),
-    300,
-  ), [visibleChartRows]);
+  // Smart Y-axis: tight domain around actual data; sparse ticks in empty cap zones
+  const chartYAxis = useMemo(() => {
+    const allRanks = visibleChartRows
+      .flatMap(r => Object.values(r.ranks).map(v => v.rank))
+      .filter((r): r is number => r != null);
+    if (!allRanks.length) {
+      return { domain: [1, 300] as [number, number], ticks: [1, 50, 100, 150, 200, 250, 300] as number[] };
+    }
+    const minR = Math.min(...allRanks);
+    const maxR = Math.max(...allRanks);
+    const dataSpan = Math.max(maxR - minR, 1);
+    const pad = Math.max(15, Math.round(dataSpan * 0.08));
+    const domMin = Math.max(1, minR - pad);
+    const domMax = maxR + pad;
+    const step = dataSpan <= 80 ? 10 : dataSpan <= 150 ? 20 : dataSpan <= 300 ? 25 : dataSpan <= 500 ? 50 : 100;
+    const tickSet = new Set<number>();
+    // Always include cap zone boundaries if they fall within domain
+    if (100 >= domMin && 100 <= domMax) tickSet.add(100);
+    if (250 >= domMin && 250 <= domMax) tickSet.add(250);
+    // Dense ticks across the data range
+    const first = Math.ceil(domMin / step) * step;
+    for (let t = first; t <= domMax; t += step) tickSet.add(t);
+    return {
+      domain: [domMin, domMax] as [number, number],
+      ticks: Array.from(tickSet).sort((a, b) => a - b),
+    };
+  }, [visibleChartRows]);
 
   const toggleChartCompany = (id: string) => {
     setActiveChartIds(prev => {
@@ -562,9 +562,9 @@ export default function RankTrendsPage() {
                       {activeChartIds.size} visible
                     </span>
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-[11px] text-slate-500">Show top</span>
-                    {[10, 15, 20].map(n => (
+                    {[5, 10, 15, 20, 25, 30, 35, 40, 45].map(n => (
                       <button
                         key={n}
                         onClick={() => setChartN(n)}
@@ -588,7 +588,8 @@ export default function RankTrendsPage() {
                     return (
                       <div
                         key={row.company_id}
-                        className="relative flex items-center gap-1.5 px-2 py-1.5 rounded-lg transition-all duration-150"
+                        onClick={() => toggleChartCompany(row.company_id)}
+                        className="relative flex items-center gap-1.5 px-2 py-1.5 rounded-lg transition-all duration-150 cursor-pointer"
                         style={{
                           background: active ? 'rgba(148,163,184,0.08)' : 'rgba(148,163,184,0.02)',
                           border:     active ? `1px solid ${color}40` : '1px solid transparent',
@@ -596,7 +597,7 @@ export default function RankTrendsPage() {
                         }}
                       >
                         <button
-                          onClick={() => toggleChartCompany(row.company_id)}
+                          onClick={e => { e.stopPropagation(); toggleChartCompany(row.company_id); }}
                           className="w-3.5 h-3.5 rounded-sm shrink-0 flex items-center justify-center cursor-pointer flex-none"
                           style={{ background: active ? color : 'transparent', border: `2px solid ${color}` }}
                         >
@@ -629,59 +630,86 @@ export default function RankTrendsPage() {
                     No companies selected. Toggle companies above to show trends.
                   </div>
                 ) : (
-                  <ResponsiveContainer width="100%" height={440}>
-                    <LineChart data={chartData} margin={{ top: 10, right: 32, left: 0, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,41,59,0.8)" />
-                      <XAxis
-                        dataKey="label"
-                        tick={{ fontSize: 11, fill: '#64748b' }}
-                        tickLine={false}
-                        axisLine={{ stroke: '#334155' }}
-                      />
-                      <YAxis
-                        reversed
-                        domain={[1, chartMaxRank + 50]}
-                        tick={{ fontSize: 11, fill: '#64748b' }}
-                        tickLine={false}
-                        axisLine={{ stroke: '#334155' }}
-                        label={{ value: 'Rank', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }}
-                      />
-                      <Tooltip
-                        content={(props) => (
-                          <TrendTooltip
-                            active={props.active}
-                            payload={props.payload as TPayload[]}
-                            label={props.label as string}
-                            focusedLine={hoveredLine}
+                  <div className="overflow-x-auto">
+                    <div style={{ minWidth: Math.max(periods.length * 110 + 120, 480) }}>
+                      <ResponsiveContainer width="100%" height={520}>
+                        <LineChart data={chartData} margin={{ top: 10, right: 80, left: 0, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,41,59,0.8)" />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fontSize: 11, fill: '#64748b' }}
+                            tickLine={false}
+                            axisLine={{ stroke: '#334155' }}
                           />
-                        )}
-                      />
-                      <ReferenceLine y={100} stroke="#22c55e" strokeDasharray="4 4" strokeOpacity={0.5}
-                        label={{ value: 'Large', position: 'right', fontSize: 10, fill: '#22c55e' }} />
-                      <ReferenceLine y={250} stroke="#eab308" strokeDasharray="4 4" strokeOpacity={0.5}
-                        label={{ value: 'Mid',   position: 'right', fontSize: 10, fill: '#eab308' }} />
-                      {visibleChartRows.map(row => {
-                        const name      = row.company_name ?? row.isin;
-                        const color     = colorMap.get(row.company_id) ?? '#3b82f6';
-                        const isFocused = hoveredLine === name;
-                        return (
-                          <Line
-                            key={row.company_id}
-                            type="monotone"
-                            dataKey={name}
-                            stroke={color}
-                            strokeWidth={isFocused ? 3 : 1.5}
-                            strokeOpacity={hoveredLine && !isFocused ? 0.15 : 1}
-                            dot={{ r: isFocused ? 5 : 3, fill: color, strokeWidth: 0 }}
-                            activeDot={{ r: 8 }}
-                            connectNulls
-                            onMouseEnter={() => setHoveredLine(name)}
-                            onMouseLeave={() => setHoveredLine(null)}
+                          <YAxis
+                            reversed
+                            domain={chartYAxis.domain}
+                            ticks={chartYAxis.ticks}
+                            tick={{ fontSize: 11, fill: '#64748b' }}
+                            tickLine={false}
+                            axisLine={{ stroke: '#334155' }}
+                            tickFormatter={v => `#${v}`}
+                            width={44}
                           />
-                        );
-                      })}
-                    </LineChart>
-                  </ResponsiveContainer>
+                          <Tooltip
+                            content={(props) => (
+                              <TrendTooltip
+                                active={props.active}
+                                payload={props.payload as TPayload[]}
+                                label={props.label as string}
+                                focusedLine={hoveredLine}
+                              />
+                            )}
+                          />
+                          <ReferenceArea y1={1}   y2={100}                fill="rgba(34,197,94,0.05)"  ifOverflow="hidden" />
+                          <ReferenceArea y1={101} y2={250}                fill="rgba(234,179,8,0.04)"  ifOverflow="hidden" />
+                          <ReferenceArea y1={251} y2={chartYAxis.domain[1]}  fill="rgba(168,85,247,0.04)" ifOverflow="hidden" />
+                          <ReferenceLine y={100} stroke="#22c55e" strokeDasharray="4 4" strokeOpacity={0.5}
+                            label={{ value: 'Large/Mid', position: 'insideTopRight', fontSize: 9, fill: '#22c55e' }} />
+                          <ReferenceLine y={250} stroke="#eab308" strokeDasharray="4 4" strokeOpacity={0.5}
+                            label={{ value: 'Mid/Small', position: 'insideTopRight', fontSize: 9, fill: '#eab308' }} />
+                          {visibleChartRows.map(row => {
+                            const name      = row.company_name ?? row.isin;
+                            const color     = colorMap.get(row.company_id) ?? '#3b82f6';
+                            const isFocused = hoveredLine === name;
+                            const endLabel  = row.nse_symbol ?? (name.length > 10 ? name.slice(0, 10) + '…' : name);
+                            return (
+                              <Line
+                                key={row.company_id}
+                                type="monotone"
+                                dataKey={name}
+                                stroke={color}
+                                strokeWidth={isFocused ? 4.5 : 2.5}
+                                strokeOpacity={hoveredLine && !isFocused ? 0.15 : 1}
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                dot={(props: any) => {
+                                  const { cx, cy, index } = props;
+                                  if (cx == null || cy == null) return <g key={`d${index ?? 'x'}`} />;
+                                  const r = isFocused ? 5 : 3;
+                                  return (
+                                    <g key={`d${index}`}>
+                                      <circle cx={cx} cy={cy} r={r} fill={color} strokeWidth={0} />
+                                      {index === chartData.length - 1 && (
+                                        <text x={cx + r + 5} y={cy + 4} fill={color} fontSize={9}
+                                          fontWeight={isFocused ? 700 : 600}
+                                          style={{ pointerEvents: 'none', userSelect: 'none' } as React.CSSProperties}>
+                                          {endLabel}
+                                        </text>
+                                      )}
+                                    </g>
+                                  );
+                                }}
+                                activeDot={{ r: 8 }}
+                                connectNulls
+                                onMouseEnter={() => setHoveredLine(name)}
+                                onMouseLeave={() => setHoveredLine(null)}
+                              />
+                            );
+                          })}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
