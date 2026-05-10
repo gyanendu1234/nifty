@@ -9,6 +9,23 @@ Nifty Market Cap Ladder tracker. Imports SEBI/AMFI Excel files (half-yearly), tr
 - Frontend: Next.js
 - Admin token: `4bBhdcRvCpoJDyufBG6ZwwGLj5N4o8Pzw3avGBhy`
 
+## Git & GitHub
+- Repository: https://github.com/gyanendu1234/nifty
+- GitHub account: `gyanendu1234`
+- Local path: `c:\Workspace\nifty`
+- Main branch: `main`
+- Initial commit pushed: 2026-05-10
+- To push future changes:
+  ```bash
+  git add <files>
+  git commit -m "message"
+  git push
+  ```
+- If Windows Credential Manager blocks push (403 denied to gyanendurout),
+  use a PAT: `git remote set-url origin https://gyanendu1234:<PAT>@github.com/gyanendu1234/nifty.git`
+  then push, then reset: `git remote set-url origin https://github.com/gyanendu1234/nifty.git`
+- Generate new PAT at: https://github.com/settings/tokens
+
 ## Data Model (key tables)
 - `companies` — one row per company (isin unique). AMFI uploads do NOT set `sector_primary`; it is always NULL until imported separately.
 - `nifty_periods` — one row per uploaded half-year file (`import_status`: uploaded → processing → completed/failed)
