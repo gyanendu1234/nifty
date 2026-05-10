@@ -1,0 +1,2 @@
+-- Dev seed (optional)
+-- Run this after uploading at least one AMFI file to add example sector tags.
