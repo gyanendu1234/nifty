@@ -34,19 +34,47 @@ async function refreshSession(): Promise<void> {
 
 interface CacheEntry { data: unknown; ts: number }
 const dataCache = new Map<string, CacheEntry>();
-const CACHE_TTL = 5 * 60 * 1000;
+const CACHE_TTL    = 5 * 60 * 1000;       // 5 min — fresh
+const STALE_TTL    = 60 * 60 * 1000;      // 1 hr — usable as stale fallback
+const FETCH_TIMEOUT = 12_000;             // 12 s per upstream call
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<globalThis.Response> {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function fetchNse(path: string): Promise<unknown> {
   if (!sessionCookies || Date.now() > sessionExpiry) await refreshSession();
 
   const url = `https://www.nseindia.com${path}`;
-  let res   = await fetch(url, { headers: { ...BASE_HEADERS, Cookie: sessionCookies } });
+
+  let res: globalThis.Response;
+  try {
+    res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, Cookie: sessionCookies } }, FETCH_TIMEOUT);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`NSE request timed out after ${FETCH_TIMEOUT / 1000}s`);
+    }
+    throw err;
+  }
 
   // If NSE returned HTML the session has expired — refresh once and retry
   const ct = res.headers.get('content-type') ?? '';
   if (!ct.includes('json')) {
     await refreshSession();
-    res = await fetch(url, { headers: { ...BASE_HEADERS, Cookie: sessionCookies } });
+    try {
+      res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, Cookie: sessionCookies } }, FETCH_TIMEOUT);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error(`NSE request timed out on retry after ${FETCH_TIMEOUT / 1000}s`);
+      }
+      throw err;
+    }
   }
 
   if (!res.ok) throw new Error(`NSE responded with ${res.status}`);
@@ -66,11 +94,25 @@ router.get('/live', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
-    const data = await fetchNse(`/api/equity-stockIndices?index=${encodeURIComponent(index)}`);
-    dataCache.set(cacheKey, { data, ts: Date.now() });
-
-    res.setHeader('X-Cache', 'MISS');
-    res.json({ data, cached_at: new Date().toISOString() });
+    try {
+      const data = await fetchNse(`/api/equity-stockIndices?index=${encodeURIComponent(index)}`);
+      dataCache.set(cacheKey, { data, ts: Date.now() });
+      res.setHeader('X-Cache', 'MISS');
+      res.json({ data, cached_at: new Date().toISOString() });
+    } catch (fetchErr) {
+      // Fall back to a recently-stale cached copy so the UI never blanks
+      if (entry && Date.now() - entry.ts < STALE_TTL) {
+        res.setHeader('X-Cache', 'STALE');
+        res.json({
+          data:       entry.data,
+          cached_at:  new Date(entry.ts).toISOString(),
+          stale:      true,
+          stale_reason: fetchErr instanceof Error ? fetchErr.message : 'NSE fetch failed',
+        });
+        return;
+      }
+      throw fetchErr;
+    }
   } catch (err) {
     next(err);
   }

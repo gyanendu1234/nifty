@@ -360,8 +360,10 @@ export interface NseIndexData {
 }
 
 export interface NseLiveResponse {
-  data:      NseIndexData;
-  cached_at: string;
+  data:          NseIndexData;
+  cached_at:     string;
+  stale?:        boolean;
+  stale_reason?: string;
 }
 
 export interface StarRow {

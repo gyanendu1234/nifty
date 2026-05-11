@@ -322,7 +322,7 @@ Losers get a CSS `filter: hue-rotate(300deg)` to shift the green SVG line to red
 The "Trend" column header is `hidden 2xl:table-cell` (only visible on very wide screens).
 
 ### Additional Data Shown Per Row
-- **F&O badge**: purple `F&O` pill when `stock.meta?.isFNOSec === true`
+- **F&O badge**: REMOVED in later session
 - **Absolute ₹ change**: shown as sub-text under the % change column (green/red colored)
 - **Trade value**: `stock.totalTradedValue` formatted with `fmtVal()` helper (₹Cr / BCr / KCr) shown under volume
 - **52W proximity label**: shown below the range bar
@@ -380,3 +380,98 @@ function TrendTooltip({ active, payload, label, focusedLine }) {
 - Returns `null` when mouse is not directly over a line (`focusedLine` is null)
 - `focusedLine` is set via `onMouseEnter`/`onMouseLeave` on each `<Line>` component
 - Compare tooltip additionally shows a `CategoryBadge` for the company's category at that period
+
+## NSE Live Page — Stock Detail Modal & Table Cleanup (session 2026-05-10 v2)
+
+### Table changes
+- **Industry column removed** — industry info moved to the click popup modal
+- **F&O badge removed** from the symbol cell
+- **Rank column** (`Rank` label) shows the stock's original NIFTY index rank from NSE data order
+  - Built via `rankMap = new Map<string, number>()` from `allStocks.forEach((s, i) => m.set(s.identifier ?? s.symbol, i + 1))`
+  - Stable across re-sorts: rank reflects original NSE data position, not filtered row number
+- **52W Range** widened: inner div `w-56` (was `w-36`), low/high label spans `w-14` (was `w-12`), now visible at `lg:` (was `xl:`)
+- **30d% / 1Y%** columns moved to `xl:` visibility (was `lg:`) to make room for the wider range
+- **Trend sparkline** in `2xl:` column: always shows `chartTodayPath` (no longer context-aware based on `statMode`)
+- All rows have `cursor-pointer` and `onClick={() => setSelectedStock(stock)}`
+
+### Stock Detail Modal (`StockModal` component)
+Triggered by clicking any row. Closes on backdrop click or `Escape` key.
+
+**Header section:**
+- Symbol (large), change % badge (green/red with trend icon), NIFTY rank badge (`#N in NIFTY 500`)
+- Company full name, ISIN (monospace), series, industry pill
+
+**Stats grid (2×4):**
+- Price + ₹ absolute change (colored)
+- Day Range (low – high)
+- Volume + trade value
+- Open / Previous Close
+
+**52W Range bar (full-width):**
+- `w-20` labels on each side showing `52W Low` / `52W High` with value
+- Gradient bar with glowing dot at current position
+- 30d% and 1Y% shown below bar
+
+**Three chart tabs + zoom:**
+- Tabs: `Today` / `30 Days` / `1 Year` — switch loads `chartTodayPath`, `chart30dPath`, `chart365dPath`
+- Zoom controls: `ZoomIn` / `%` reset button / `ZoomOut` / `RotateCcw` reset icon
+  - `changeZoom(delta)` snaps to 0.25 increments via `Math.round((z + delta) * 4) / 4`
+  - Range: 0.5× to 4×
+- Zoom works by setting wrapper `style={{ width: \`${Math.round(zoom * 100)}%\`, minWidth: '100%' }}` inside `overflow: auto` container
+- Container `maxHeight: 280` so modal doesn't grow too tall; user scrolls horizontally/vertically when zoomed
+- Image `filter` still applies: gainers = none, losers = `hue-rotate(300deg) saturate(1.2)`, flat = `grayscale(60%)`
+- `key={chartTab + symbol}` on `<img>` forces re-render when tab changes
+
+**`indexLabel` useMemo**: maps `selectedIndex` key back to friendly label (e.g. `'NIFTY 500'` → `'NIFTY 500'`) for the rank badge.
+
+## NSE Live — Critical Bug Fixes (session 2026-05-11)
+
+A senior-BA-style audit identified three critical bugs on `/nse-live`. All three fixed in this session.
+
+### Bug 1 — Index switching used to hang for 60+s on non-NIFTY-500 indices
+
+**Root cause:** `fetchNse()` in `backend/src/routes/nseRoutes.ts` had no fetch timeout. If NSE was rate-limiting or slow, the proxy waited indefinitely (Node's default fetch has no time limit).
+
+**Fix:**
+- New `fetchWithTimeout(url, init, ms)` helper wraps every upstream call with a `AbortController` timed at **12 s** (`FETCH_TIMEOUT`).
+- On `AbortError`, throws clear `"NSE request timed out after 12s"` so the frontend can show a useful message.
+- Stale-cache fallback: introduced `STALE_TTL = 60 * 60 * 1000` (1 hour). When the upstream fetch fails AND a cached entry from within `STALE_TTL` exists, the route returns:
+  ```json
+  { data, cached_at, stale: true, stale_reason: "<error msg>" }
+  ```
+  with header `X-Cache: STALE`. The UI never blanks during a transient NSE failure.
+- `Response` was shadowed by Express's import — the timeout helper uses `globalThis.Response` to refer to the fetch response type.
+
+### Bug 2 — Sticky red error banner that never auto-dismissed
+
+**Root cause:** `setError(...)` was called on every failure but there was no auto-clear, and no abort tracking — so a late-arriving error from a previous request could overwrite a fresh successful response.
+
+**Fix in `frontend/src/app/(public)/nse-live/page.tsx`:**
+- `requestIdRef = useRef(0)` — every `fetchData()` increments it. Both the success and error branches first check `if (reqId !== requestIdRef.current) return;` so stale responses are silently dropped.
+- New `flashError(msg)` helper: sets the error AND queues `setTimeout(() => setError(null), 6000)` so banners self-clear after 6 seconds. Stored in `errorTimerRef`.
+- Error banner UI now has explicit **Retry** button (calls `fetchData`) and **dismiss × button** (`setError(null)`).
+- On error, `nseData` is intentionally NOT cleared — the table keeps showing previous data while the user retries.
+- When the proxy returns `stale: true`, the banner shows `"Live refresh failed — showing cached data (<reason>)"`.
+
+### Bug 3 — Active sort column was hidden on mid-size screens
+
+**Root cause:** When user picks "Top Losers 30d", `STAT_DEFAULTS` correctly switches `sortKey` to `perChange30d`. But the `30d %` and `1Y %` columns were `hidden xl:table-cell` (≥1280 px), so on `lg` and below the user saw the table sorted by an invisible column — appearing as "the table is sorting by today's % wrong."
+
+**Fix:**
+- Both columns moved from `hidden xl:table-cell` → `hidden lg:table-cell` (≥1024 px). They now appear alongside the 52W Range column.
+- Active-sort highlighting: when `sortKey === 'perChange30d'` (or `perChange365d`), the corresponding `<th>` gets `bg-cyan-950/30` and the `<td>` cells get `bg-cyan-950/20` — making the sort target unmistakable.
+- New status strip above the table:
+  ```
+  Showing: Top losers 30 days · sorted by 30-day % ↓ · industry: Banks
+  ```
+  Built from two helper functions added near the top of the file:
+  - `statSummary(m: StatMode): string` — human label per filter
+  - `sortKeyLabel(k: SortKey): string` — human label per sort key
+- Loading veil: when `loading && nseData` (refresh / index switch happening with old data still on screen), a translucent overlay with `Loading <indexLabel>…` spinner is rendered absolutely positioned over the table container. Container is now `relative` to host the overlay.
+
+### Type changes
+`frontend/src/types/index.ts` — `NseLiveResponse` now has optional `stale?: boolean` and `stale_reason?: string`.
+
+### Verified
+- `tsc --noEmit -p .` passes for both backend and frontend.
+- Live curl tests: NIFTY 500, BANK, 50, IT, PHARMA, AUTO all return in <1 s through the proxy. The previous "60-second hang" appears to have been a transient NSE rate-limit issue; the timeout + stale fallback ensure the UI never hangs again.

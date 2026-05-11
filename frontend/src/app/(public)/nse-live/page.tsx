@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Activity, RefreshCw, TrendingUp, TrendingDown,
-  Search, ChevronUp, ChevronDown, Clock,
+  Search, ChevronUp, ChevronDown, Clock, X, ZoomIn, ZoomOut, RotateCcw,
 } from 'lucide-react';
 import { getNseLive } from '@/lib/api';
 import { NseIndexData, NseStock } from '@/types';
@@ -126,10 +126,33 @@ function fmtVal(v: number) {
   if (v >= 1e5)  return `₹${(v / 1e5).toFixed(1)}L`;
   return `₹${v.toLocaleString('en-IN')}`;
 }
-function stockChartUrl(stock: NseStock, mode: StatMode): string | undefined {
-  if (mode === 'gainers_30d' || mode === 'losers_30d') return stock.chart30dPath;
-  if (mode === 'gainers_1y'  || mode === 'losers_1y')  return stock.chart365dPath;
-  return stock.chartTodayPath;
+
+function statSummary(m: StatMode): string {
+  switch (m) {
+    case 'all':           return 'All stocks';
+    case 'gainers_today': return 'Top gainers today';
+    case 'losers_today':  return 'Top losers today';
+    case 'gainers_30d':   return 'Top gainers 30 days';
+    case 'losers_30d':    return 'Top losers 30 days';
+    case 'gainers_1y':    return 'Top gainers 1 year';
+    case 'losers_1y':     return 'Top losers 1 year';
+    case 'only_buyers':   return 'Only buyers (positive)';
+    case 'only_sellers':  return 'Only sellers (negative)';
+    case 'most_active':   return 'Most active by volume';
+    case 'near52h':       return 'Near 52-week high';
+    case 'near52l':       return 'Near 52-week low';
+  }
+}
+
+function sortKeyLabel(k: SortKey): string {
+  switch (k) {
+    case 'symbol':            return 'Symbol';
+    case 'lastPrice':         return 'Price';
+    case 'pChange':           return "Today's %";
+    case 'totalTradedVolume': return 'Volume';
+    case 'perChange30d':      return '30-day %';
+    case 'perChange365d':     return '1-year %';
+  }
 }
 
 interface SortHeaderProps {
@@ -160,6 +183,285 @@ function SortHeader({ label, sortKey, current, dir, onSort, right }: SortHeaderP
   );
 }
 
+// ── Stock Detail Modal ─────────────────────────────────────────────────────
+
+type ChartTab = 'today' | '30d' | '1y';
+
+function StockModal({ stock, indexName, niftyRank, onClose }: {
+  stock: NseStock;
+  indexName: string;
+  niftyRank: number;
+  onClose: () => void;
+}) {
+  const [chartTab, setChartTab] = useState<ChartTab>('today');
+  const [zoom,     setZoom]     = useState(1);
+  const imgRef = useRef<HTMLDivElement>(null);
+
+  const isGainer = stock.pChange > 0;
+  const isLoser  = stock.pChange < 0;
+  const pos      = rangePos(stock);
+  const dotColor = isGainer ? '#22c55e' : isLoser ? '#ef4444' : '#94a3b8';
+
+  const charts: Record<ChartTab, string | undefined> = {
+    today: stock.chartTodayPath,
+    '30d': stock.chart30dPath,
+    '1y':  stock.chart365dPath,
+  };
+  const activeChart = charts[chartTab];
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const changeZoom = (delta: number) =>
+    setZoom(z => Math.min(4, Math.max(0.5, Math.round((z + delta) * 4) / 4)));
+
+  const modalCard = {
+    background:  'rgba(10,14,26,0.98)',
+    borderColor: 'rgba(148,163,184,0.12)',
+    boxShadow:   '0 24px 80px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.04)',
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded-2xl border overflow-hidden flex flex-col"
+        style={{ ...modalCard, maxHeight: 'calc(100vh - 2rem)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* ── Modal header ── */}
+        <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b shrink-0" style={{ borderColor: 'rgba(148,163,184,0.08)' }}>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-2xl font-bold text-white tracking-tight">{stock.symbol}</span>
+              <span className={`text-sm font-bold px-2.5 py-0.5 rounded-lg tabular-nums ${
+                isGainer ? 'bg-green-950/70 text-green-400 border border-green-800/40'
+                : isLoser ? 'bg-red-950/70 text-red-400 border border-red-800/40'
+                : 'bg-slate-800 text-slate-400 border border-slate-700/40'
+              }`}>
+                {isGainer ? <TrendingUp className="w-3.5 h-3.5 inline mr-1" /> : isLoser ? <TrendingDown className="w-3.5 h-3.5 inline mr-1" /> : null}
+                {stock.pChange >= 0 ? '+' : ''}{stock.pChange.toFixed(2)}%
+              </span>
+              <span className="text-xs text-slate-500 bg-slate-800/60 border border-slate-700/30 px-2 py-0.5 rounded-md">
+                #{niftyRank} in {indexName}
+              </span>
+            </div>
+
+            <div className="text-slate-300 text-sm mt-1 truncate">{stock.meta?.companyName}</div>
+
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span className="text-slate-600 text-xs font-mono">{stock.meta?.isin}</span>
+              <span className="text-slate-700 text-xs">·</span>
+              <span className="text-slate-600 text-xs">{stock.series}</span>
+              {stock.meta?.industry && (
+                <span className="text-[11px] text-slate-400 bg-slate-800/50 border border-slate-700/40 px-2 py-0.5 rounded-md">
+                  {stock.meta.industry}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="ml-3 shrink-0 p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800/60 transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* ── Scrollable body ── */}
+        <div className="overflow-y-auto flex-1 min-h-0">
+
+          {/* Stats grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 border-b" style={{ borderColor: 'rgba(148,163,184,0.06)' }}>
+            {[
+              {
+                label: 'Price',
+                main: `₹${fmt(stock.lastPrice)}`,
+                sub: `${stock.change >= 0 ? '+' : ''}${fmt(stock.change)}`,
+                subColor: isGainer ? 'text-green-500' : isLoser ? 'text-red-500' : 'text-slate-500',
+              },
+              {
+                label: 'Day Range',
+                main: `${fmt(stock.dayLow)}`,
+                sub: `↑ ${fmt(stock.dayHigh)}`,
+                subColor: 'text-slate-500',
+              },
+              {
+                label: 'Volume',
+                main: fmtVol(stock.totalTradedVolume),
+                sub: stock.totalTradedValue != null ? fmtVal(stock.totalTradedValue) : null,
+                subColor: 'text-slate-500',
+              },
+              {
+                label: 'Open / Prev Close',
+                main: `₹${fmt(stock.open)}`,
+                sub: `Prev ₹${fmt(stock.previousClose)}`,
+                subColor: 'text-slate-500',
+              },
+            ].map(({ label, main, sub, subColor }) => (
+              <div key={label} className="p-4 border-r last:border-r-0" style={{ borderColor: 'rgba(148,163,184,0.06)' }}>
+                <div className="text-slate-500 text-[11px] uppercase tracking-wide mb-1">{label}</div>
+                <div className="text-slate-100 font-semibold text-sm tabular-nums">{main}</div>
+                {sub && <div className={`text-[11px] tabular-nums mt-0.5 ${subColor}`}>{sub}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* 52W Range — wide */}
+          <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(148,163,184,0.06)' }}>
+            <div className="flex items-center justify-between text-[11px] mb-2">
+              <span className="text-slate-500 uppercase tracking-wide">52-Week Range</span>
+              <div className="flex items-center gap-3 tabular-nums">
+                {stock.nearWKH <= 5 && <span className="text-green-500/80">▲ {stock.nearWKH.toFixed(1)}% to 52W High</span>}
+                {stock.nearWKL <= 5 && <span className="text-red-500/80">▼ {stock.nearWKL.toFixed(1)}% to 52W Low</span>}
+                {stock.nearWKH > 5 && stock.nearWKL > 5 && (
+                  <span className="text-slate-600">{rangePos(stock).toFixed(0)}% of range</span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="text-right shrink-0 w-20">
+                <div className="text-[10px] text-slate-600">52W Low</div>
+                <div className="text-xs text-red-400/80 font-medium tabular-nums">{fmt(stock.yearLow)}</div>
+              </div>
+              <div className="flex-1 h-2.5 rounded-full bg-slate-800 relative">
+                <div
+                  className="absolute inset-0 rounded-full opacity-25"
+                  style={{ background: 'linear-gradient(90deg,#ef4444,#eab308,#22c55e)' }}
+                />
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full border-2 transition-all duration-300"
+                  style={{
+                    left:        `calc(${pos}% - 7px)`,
+                    background:   dotColor,
+                    borderColor: 'rgba(10,14,26,0.9)',
+                    boxShadow:   `0 0 10px ${dotColor}90`,
+                  }}
+                />
+              </div>
+              <div className="shrink-0 w-20">
+                <div className="text-[10px] text-slate-600">52W High</div>
+                <div className="text-xs text-green-400/80 font-medium tabular-nums">{fmt(stock.yearHigh)}</div>
+              </div>
+            </div>
+            <div className="flex justify-between mt-2.5 text-xs tabular-nums">
+              <span className={`font-medium ${stock.perChange30d >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                30d: {stock.perChange30d >= 0 ? '+' : ''}{stock.perChange30d.toFixed(2)}%
+              </span>
+              <span className={`font-medium ${stock.perChange365d >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                1Y: {stock.perChange365d >= 0 ? '+' : ''}{stock.perChange365d.toFixed(2)}%
+              </span>
+            </div>
+          </div>
+
+          {/* ── Charts section ── */}
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              {/* Chart tabs */}
+              <div className="flex gap-1 p-1 rounded-xl bg-slate-800/60 border border-slate-700/30">
+                {(['today', '30d', '1y'] as ChartTab[]).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => { setChartTab(tab); setZoom(1); }}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
+                      chartTab === tab
+                        ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-600/30'
+                        : 'text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {tab === 'today' ? "Today" : tab === '30d' ? '30 Days' : '1 Year'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Zoom controls */}
+              <div className="flex items-center gap-0.5 p-1 rounded-xl bg-slate-800/60 border border-slate-700/30">
+                <button
+                  onClick={() => changeZoom(0.25)}
+                  title="Zoom in"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700/60 transition-colors cursor-pointer"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setZoom(1)}
+                  title="Reset zoom"
+                  className="px-2 py-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-700/60 transition-colors cursor-pointer text-[11px] tabular-nums min-w-[38px] text-center"
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  onClick={() => changeZoom(-0.25)}
+                  title="Zoom out"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700/60 transition-colors cursor-pointer"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setZoom(1)}
+                  title="Reset"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700/60 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Chart viewport */}
+            <div
+              ref={imgRef}
+              className="rounded-xl border overflow-auto"
+              style={{ background: 'rgba(15,23,42,0.7)', borderColor: 'rgba(148,163,184,0.07)', maxHeight: 280 }}
+            >
+              {activeChart ? (
+                <div style={{ width: `${Math.round(zoom * 100)}%`, minWidth: '100%' }}>
+                  <img
+                    key={`${chartTab}-${stock.symbol}`}
+                    src={activeChart}
+                    alt={`${stock.symbol} ${chartTab} chart`}
+                    className="w-full h-auto block"
+                    style={{
+                      filter: isGainer
+                        ? 'none'
+                        : isLoser
+                        ? 'hue-rotate(300deg) saturate(1.2)'
+                        : 'grayscale(60%)',
+                    }}
+                    onError={e => {
+                      const el = e.target as HTMLImageElement;
+                      el.style.display = 'none';
+                      const msg = document.createElement('div');
+                      msg.className = 'py-14 text-center text-slate-600 text-sm';
+                      msg.textContent = 'Chart not available from NSE';
+                      el.parentElement?.appendChild(msg);
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="py-14 text-center text-slate-600 text-sm">Chart not available</div>
+              )}
+            </div>
+
+            <p className="text-[10px] text-slate-700 mt-2 text-right">
+              Charts served by NSE India · Scroll to pan when zoomed
+            </p>
+          </div>
+
+        </div>{/* end scrollable body */}
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ──────────────────────────────────────────────────────────────
+
 export default function NseLivePage() {
   const [selectedIndex, setSelectedIndex] = useState('NIFTY 500');
   const [nseData,       setNseData]       = useState<NseIndexData | null>(null);
@@ -172,24 +474,41 @@ export default function NseLivePage() {
   const [sortKey,       setSortKey]       = useState<SortKey>('pChange');
   const [sortDir,       setSortDir]       = useState<SortDir>('desc');
   const [countdown,     setCountdown]     = useState(300);
+  const [selectedStock, setSelectedStock] = useState<NseStock | null>(null);
 
   const refreshTimer   = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestIdRef   = useRef(0);
+  const errorTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-dismiss the error banner after 6 s. Manual dismiss clears it immediately.
+  const flashError = useCallback((msg: string | null) => {
+    setError(msg);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    if (msg) {
+      errorTimerRef.current = setTimeout(() => setError(null), 6000);
+    }
+  }, []);
 
   const fetchData = useCallback(async () => {
+    const reqId = ++requestIdRef.current;
     setLoading(true);
-    setError(null);
     try {
       const res = await getNseLive(selectedIndex);
+      // Stale response from a previous index/refresh — ignore.
+      if (reqId !== requestIdRef.current) return;
       setNseData(res.data);
       setCachedAt(res.cached_at);
       setCountdown(300);
+      flashError(res.stale ? `Live refresh failed — showing cached data${res.stale_reason ? ` (${res.stale_reason})` : ''}` : null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch NSE data');
+      if (reqId !== requestIdRef.current) return;
+      // Don't blank the table — keep whatever data is already shown.
+      flashError(e instanceof Error ? e.message : 'Failed to fetch NSE data');
     } finally {
-      setLoading(false);
+      if (reqId === requestIdRef.current) setLoading(false);
     }
-  }, [selectedIndex]);
+  }, [selectedIndex, flashError]);
 
   useEffect(() => {
     fetchData();
@@ -206,6 +525,13 @@ export default function NseLivePage() {
     () => (nseData?.data ?? []).filter(s => s.meta?.isin),
     [nseData],
   );
+
+  // Original NSE data order → NIFTY rank for each stock
+  const rankMap = useMemo(() => {
+    const m = new Map<string, number>();
+    allStocks.forEach((s, i) => m.set(s.identifier ?? s.symbol, i + 1));
+    return m;
+  }, [allStocks]);
 
   const industries = useMemo(() => {
     const s = new Set<string>();
@@ -281,6 +607,15 @@ export default function NseLivePage() {
 
   const selectCls = 'px-3 py-2 rounded-xl text-xs bg-slate-800/60 border border-slate-700/40 text-slate-300 focus:outline-none focus:border-cyan-600/60 transition-colors cursor-pointer';
 
+  // Friendly index label from the groups list
+  const indexLabel = useMemo(() => {
+    for (const grp of INDEX_GROUPS) {
+      const found = grp.indices.find(i => i.key === selectedIndex);
+      if (found) return found.label;
+    }
+    return selectedIndex;
+  }, [selectedIndex]);
+
   return (
     <div className="space-y-5">
 
@@ -292,7 +627,7 @@ export default function NseLivePage() {
             <h1 className="text-2xl font-bold text-white tracking-tight">NSE Live</h1>
           </div>
           <p className="text-slate-400 text-sm mt-0.5 pl-7">
-            Real-time data from NSE India · 5-min cache
+            Real-time data from NSE India · 5-min cache · Click any row for details
           </p>
         </div>
 
@@ -307,10 +642,23 @@ export default function NseLivePage() {
         </button>
       </div>
 
-      {/* ── Error ── */}
+      {/* ── Error (dismissible, auto-clears after 6s) ── */}
       {error && (
-        <div className="p-4 rounded-xl bg-red-950/40 border border-red-800/40 text-red-300 text-sm">
-          {error}
+        <div className="flex items-start justify-between gap-3 p-3 rounded-xl bg-red-950/40 border border-red-800/40 text-red-300 text-sm">
+          <span className="flex-1 leading-relaxed">{error}</span>
+          <button
+            onClick={fetchData}
+            className="px-2.5 py-1 rounded-md text-xs font-medium border border-red-700/40 hover:bg-red-900/40 text-red-200 transition-colors cursor-pointer"
+          >
+            Retry
+          </button>
+          <button
+            onClick={() => setError(null)}
+            className="p-1 rounded-md text-red-400 hover:text-red-200 hover:bg-red-900/40 transition-colors cursor-pointer"
+            title="Dismiss"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -411,7 +759,6 @@ export default function NseLivePage() {
       {/* ── Filters ── */}
       <div className="flex flex-wrap items-center gap-3">
 
-        {/* Market Stats dropdown */}
         <select
           value={statMode}
           onChange={e => handleStatMode(e.target.value as StatMode)}
@@ -437,7 +784,6 @@ export default function NseLivePage() {
           </optgroup>
         </select>
 
-        {/* Index / Group dropdown */}
         <select
           value={selectedIndex}
           onChange={e => setSelectedIndex(e.target.value)}
@@ -452,7 +798,6 @@ export default function NseLivePage() {
           ))}
         </select>
 
-        {/* Search */}
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
           <input
@@ -463,7 +808,6 @@ export default function NseLivePage() {
           />
         </div>
 
-        {/* Industry dropdown */}
         <select
           value={industry}
           onChange={e => setIndustry(e.target.value)}
@@ -471,6 +815,22 @@ export default function NseLivePage() {
         >
           {industries.map(ind => <option key={ind} value={ind}>{ind}</option>)}
         </select>
+      </div>
+
+      {/* ── Active filter / sort summary ── */}
+      <div className="flex items-center gap-2 text-[11px] text-slate-500 -mt-1 px-1">
+        <span className="text-slate-600">Showing:</span>
+        <span className="text-slate-300 font-medium">{statSummary(statMode)}</span>
+        <span className="text-slate-700">·</span>
+        <span>sorted by</span>
+        <span className="text-cyan-400 font-medium">{sortKeyLabel(sortKey)}</span>
+        <span className="text-slate-600">{sortDir === 'desc' ? '↓' : '↑'}</span>
+        {industry !== 'All' && (
+          <>
+            <span className="text-slate-700">·</span>
+            <span className="text-slate-400">industry: {industry}</span>
+          </>
+        )}
       </div>
 
       {/* ── Table ── */}
@@ -481,21 +841,28 @@ export default function NseLivePage() {
         </div>
       ) : (
         <div
-          className="rounded-2xl border overflow-hidden"
+          className="rounded-2xl border overflow-hidden relative"
           style={{ background: 'rgba(10,14,26,0.9)', borderColor: 'rgba(148,163,184,0.08)', boxShadow: '0 4px 24px rgba(0,0,0,0.3)' }}
         >
+          {/* Loading veil during index switch / refresh */}
+          {loading && nseData && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"
+              style={{ background: 'rgba(10,14,26,0.55)', backdropFilter: 'blur(1.5px)' }}>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700/40 text-xs text-slate-300">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                Loading {indexLabel}…
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[700px]">
               <thead>
                 <tr style={{ background: 'rgba(15,23,42,0.85)', borderBottom: '1px solid rgba(148,163,184,0.06)' }}>
-                  <th className="text-left px-4 py-3 w-10">
-                    <span className="text-xs text-slate-600 font-medium">#</span>
+                  <th className="text-left px-4 py-3 w-12">
+                    <span className="text-xs text-slate-600 font-medium">Rank</span>
                   </th>
                   <th className="text-left px-4 py-3">
                     <SortHeader label="Symbol" sortKey="symbol" current={sortKey} dir={sortDir} onSort={handleSort} />
-                  </th>
-                  <th className="text-left px-4 py-3 hidden lg:table-cell">
-                    <span className="text-xs text-slate-500 font-medium">Industry</span>
                   </th>
                   <th className="text-right px-4 py-3">
                     <SortHeader label="Price" sortKey="lastPrice" current={sortKey} dir={sortDir} onSort={handleSort} right />
@@ -506,13 +873,17 @@ export default function NseLivePage() {
                   <th className="text-right px-4 py-3 hidden md:table-cell">
                     <SortHeader label="Volume" sortKey="totalTradedVolume" current={sortKey} dir={sortDir} onSort={handleSort} right />
                   </th>
-                  <th className="text-center px-4 py-3 hidden xl:table-cell">
+                  <th className="text-center px-4 py-3 hidden lg:table-cell">
                     <span className="text-xs text-slate-500 font-medium">52W Range</span>
                   </th>
-                  <th className="text-right px-4 py-3 hidden lg:table-cell">
+                  <th className={`text-right px-4 py-3 hidden lg:table-cell transition-colors ${
+                    sortKey === 'perChange30d' ? 'bg-cyan-950/30' : ''
+                  }`}>
                     <SortHeader label="30d %" sortKey="perChange30d" current={sortKey} dir={sortDir} onSort={handleSort} right />
                   </th>
-                  <th className="text-right px-4 py-3 hidden lg:table-cell">
+                  <th className={`text-right px-4 py-3 hidden lg:table-cell transition-colors ${
+                    sortKey === 'perChange365d' ? 'bg-cyan-950/30' : ''
+                  }`}>
                     <SortHeader label="1Y %" sortKey="perChange365d" current={sortKey} dir={sortDir} onSort={handleSort} right />
                   </th>
                   <th className="text-center px-4 py-3 hidden 2xl:table-cell">
@@ -524,42 +895,38 @@ export default function NseLivePage() {
               <tbody>
                 {filteredStocks.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-12 text-slate-500 text-sm">
+                    <td colSpan={9} className="text-center py-12 text-slate-500 text-sm">
                       No stocks match the current filters.
                     </td>
                   </tr>
-                ) : filteredStocks.map((stock, i) => {
+                ) : filteredStocks.map(stock => {
                   const pos      = rangePos(stock);
                   const isGainer = stock.pChange > 0;
                   const isLoser  = stock.pChange < 0;
                   const dotColor = isGainer ? '#22c55e' : isLoser ? '#ef4444' : '#94a3b8';
+                  const niftyRank = rankMap.get(stock.identifier ?? stock.symbol) ?? 0;
 
                   return (
                     <tr
                       key={stock.identifier ?? stock.symbol}
-                      className="border-t hover:bg-slate-800/25 transition-colors duration-100"
+                      className="border-t hover:bg-slate-800/30 transition-colors duration-100 cursor-pointer"
                       style={{ borderColor: 'rgba(148,163,184,0.04)' }}
+                      onClick={() => setSelectedStock(stock)}
                     >
-                      <td className="px-4 py-3 text-xs text-slate-600 tabular-nums">{i + 1}</td>
-
+                      {/* NIFTY Rank */}
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-semibold text-slate-100 text-sm leading-tight">{stock.symbol}</span>
-                          {stock.meta?.isFNOSec && (
-                            <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-900/60 text-purple-300 border border-purple-700/40 leading-none">F&O</span>
-                          )}
-                        </div>
+                        <span className="text-xs font-semibold text-slate-500 tabular-nums">{niftyRank}</span>
+                      </td>
+
+                      {/* Symbol + Company */}
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-slate-100 text-sm leading-tight">{stock.symbol}</div>
                         <div className="text-slate-500 text-[11px] truncate max-w-[160px] mt-0.5">
                           {stock.meta?.companyName}
                         </div>
                       </td>
 
-                      <td className="px-4 py-3 hidden lg:table-cell">
-                        <span className="text-[11px] text-slate-400 bg-slate-800/50 border border-slate-700/40 px-2 py-0.5 rounded-md whitespace-nowrap">
-                          {stock.meta?.industry ?? '—'}
-                        </span>
-                      </td>
-
+                      {/* Price */}
                       <td className="px-4 py-3 text-right tabular-nums">
                         <span className="text-slate-100 font-semibold text-sm">{fmt(stock.lastPrice)}</span>
                         <div className="text-slate-600 text-[11px]">
@@ -567,6 +934,7 @@ export default function NseLivePage() {
                         </div>
                       </td>
 
+                      {/* Change % */}
                       <td className="px-4 py-3 text-right tabular-nums">
                         <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md text-xs font-semibold ${
                           isGainer ? 'bg-green-950/60 text-green-400'
@@ -583,6 +951,7 @@ export default function NseLivePage() {
                         </div>
                       </td>
 
+                      {/* Volume */}
                       <td className="px-4 py-3 text-right text-xs text-slate-400 hidden md:table-cell tabular-nums">
                         <div>{fmtVol(stock.totalTradedVolume)}</div>
                         {stock.totalTradedValue != null && (
@@ -590,64 +959,66 @@ export default function NseLivePage() {
                         )}
                       </td>
 
-                      <td className="px-4 py-3 hidden xl:table-cell">
-                        <div className="flex items-center gap-2 w-36 mx-auto">
-                          <span className="text-[10px] text-slate-600 tabular-nums w-12 text-right">
+                      {/* 52W Range — wider */}
+                      <td className="px-4 py-3 hidden lg:table-cell">
+                        <div className="flex items-center gap-2 w-56 mx-auto">
+                          <span className="text-[10px] text-slate-600 tabular-nums w-14 text-right shrink-0">
                             {stock.yearLow.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                           </span>
-                          <div className="flex-1 h-1.5 rounded-full bg-slate-800 relative overflow-visible">
+                          <div className="flex-1 h-2 rounded-full bg-slate-800 relative overflow-visible">
                             <div className="absolute inset-0 rounded-full opacity-20"
                               style={{ background: 'linear-gradient(90deg,#ef4444,#eab308,#22c55e)' }} />
                             <div
-                              className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 transition-all duration-300"
+                              className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all duration-300"
                               style={{
-                                left:        `calc(${pos}% - 5px)`,
+                                left:        `calc(${pos}% - 6px)`,
                                 background:   dotColor,
                                 borderColor: 'rgba(10,14,26,0.9)',
                                 boxShadow:   `0 0 6px ${dotColor}80`,
                               }}
                             />
                           </div>
-                          <span className="text-[10px] text-slate-600 tabular-nums w-12">
+                          <span className="text-[10px] text-slate-600 tabular-nums w-14 shrink-0">
                             {stock.yearHigh.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                           </span>
                         </div>
                         <div className="flex justify-center mt-1 gap-2 text-[10px] tabular-nums">
-                          {stock.nearWKH <= 5 && (
+                          {stock.nearWKH <= 5 ? (
                             <span className="text-green-500/80">▲ {stock.nearWKH.toFixed(1)}% to 52H</span>
-                          )}
-                          {stock.nearWKL <= 5 && (
+                          ) : stock.nearWKL <= 5 ? (
                             <span className="text-red-500/80">▼ {stock.nearWKL.toFixed(1)}% to 52L</span>
-                          )}
-                          {stock.nearWKH > 5 && stock.nearWKL > 5 && (
-                            <span className="text-slate-700">{pos.toFixed(0)}%</span>
+                          ) : (
+                            <span className="text-slate-700">{pos.toFixed(0)}% of range</span>
                           )}
                         </div>
                       </td>
 
+                      {/* 30d % */}
                       <td className={`px-4 py-3 text-right text-xs tabular-nums hidden lg:table-cell font-medium ${
                         stock.perChange30d > 0 ? 'text-green-400' : stock.perChange30d < 0 ? 'text-red-400' : 'text-slate-400'
-                      }`}>
+                      } ${sortKey === 'perChange30d' ? 'bg-cyan-950/20' : ''}`}>
                         {stock.perChange30d >= 0 ? '+' : ''}{stock.perChange30d.toFixed(1)}%
                       </td>
 
+                      {/* 1Y % */}
                       <td className={`px-4 py-3 text-right text-xs tabular-nums hidden lg:table-cell font-medium ${
                         stock.perChange365d > 0 ? 'text-green-400' : stock.perChange365d < 0 ? 'text-red-400' : 'text-slate-400'
-                      }`}>
+                      } ${sortKey === 'perChange365d' ? 'bg-cyan-950/20' : ''}`}>
                         {stock.perChange365d >= 0 ? '+' : ''}{stock.perChange365d.toFixed(1)}%
                       </td>
 
+                      {/* Trend sparkline */}
                       <td className="px-4 py-3 hidden 2xl:table-cell">
                         {(() => {
-                          const url = stockChartUrl(stock, statMode);
+                          const url = stock.chartTodayPath;
                           return url ? (
                             <img
                               src={url}
                               alt={`${stock.symbol} trend`}
                               width={110}
                               height={40}
-                              className="opacity-80 hover:opacity-100 transition-opacity"
-                              style={{ filter: isGainer ? 'hue-rotate(0deg)' : isLoser ? 'hue-rotate(300deg)' : 'grayscale(60%)' }}
+                              className="opacity-70 hover:opacity-100 transition-opacity pointer-events-none"
+                              style={{ filter: isGainer ? 'none' : isLoser ? 'hue-rotate(300deg)' : 'grayscale(60%)' }}
                               onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
                             />
                           ) : <span className="text-slate-700 text-xs">—</span>;
@@ -665,11 +1036,21 @@ export default function NseLivePage() {
               className="px-4 py-2.5 text-[11px] text-slate-600 border-t flex items-center justify-between"
               style={{ borderColor: 'rgba(148,163,184,0.06)' }}
             >
-              <span>{filteredStocks.length} stocks · sorted by {sortKey} {sortDir}</span>
+              <span>{filteredStocks.length} stocks · sorted by {sortKey} {sortDir} · click row for details</span>
               <span>Source: NSE India · Not investment advice</span>
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Stock Detail Modal ── */}
+      {selectedStock && (
+        <StockModal
+          stock={selectedStock}
+          indexName={indexLabel}
+          niftyRank={rankMap.get(selectedStock.identifier ?? selectedStock.symbol) ?? 0}
+          onClose={() => setSelectedStock(null)}
+        />
       )}
     </div>
   );
